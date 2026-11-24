@@ -4,6 +4,7 @@
 use Mk4U\TgApiKit\Generator;
 use Mk4U\TgApiKit\Generator\Entities;
 use Mk4U\TgApiKit\Generator\Methods;
+use Mk4U\TgApiKit\Generator\SubTypes;
 use Mk4U\TgApiKit\Scrapper;
 
 include getcwd() . '/vendor/autoload.php';
@@ -13,6 +14,7 @@ echo "This process may take a few seconds...\n";
 $data = Scrapper::data();
 
 echo "🏗️​  Creating entities\n";
+SubTypes::generate($data['types']);
 Entities::generate($data['types']);
 
 echo "💻 Obtaining methods\n";

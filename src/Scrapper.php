@@ -115,14 +115,7 @@ class Scrapper
 
             if ($currentType === 'methods' && isset($result[$currentType][$currentName]['description'])) {
                 $description = implode(PHP_EOL, $result[$currentType][$currentName]['description']);
-
-                if (preg_match('/(?:on success,)([^.]*)/i', $description, $match)) {
-                    static::extractReturnTypes($currentType, $currentName, trim($match[1]), $result);
-                } elseif (preg_match('/(?:returns)([^.]*)(?:on success)?/i', $description, $match)) {
-                    static::extractReturnTypes($currentType, $currentName, trim($match[1]), $result);
-                } elseif (preg_match('/([^.]*)(?:is returned)/i', $description, $match)) {
-                    static::extractReturnTypes($currentType, $currentName, trim($match[1]), $result);
-                }
+                static::extractReturnTypes($currentType, $currentName, $description, $result);
             }
         }
 
@@ -144,25 +137,98 @@ class Scrapper
         return $data;
     }
 
-    protected static function extractReturnTypes($currentType, $currentName, $return, &$items): void
+    protected static function extractReturnTypes($currentType, $currentName, string $description, &$items): void
     {
-        if (preg_match("/(?:array of )+(\w*)/i", $return, $match)) {
-            $ret = static::cleanType($match[1]);
-            $rets = array_map(fn($r) => "Array<$r>", $ret);
-            $items[$currentType][$currentName]['returns'] = $rets;
-        } else {
-            $words = explode(' ', $return);
-            $rets = [];
-            foreach ($words as $ret) {
-                $cleaned_ret = static::cleanType(preg_replace('/[^a-zA-Z0-9]/', '', $ret));
-                foreach ($cleaned_ret as $r) {
-                    if (ctype_upper($ret[0])) {
-                        $rets[] = $r;
+        $returns = [];
+        $sentences = [];
+
+        foreach ([
+            '/\b(Returns?\b[^.]*)/',
+            '/\b(On success,\s*[^.]*)/i',
+            '/([^.]*\b(?:is|are)\s+returned[^.]*)/',
+        ] as $pattern) {
+            if (preg_match_all($pattern, $description, $matches)) {
+                foreach ($matches[1] as $sentence) {
+                    $sentence = trim($sentence);
+
+                    if ($sentence !== '') {
+                        $sentences[$sentence] = true;
                     }
                 }
             }
-            $items[$currentType][$currentName]['returns'] = $rets;
         }
+
+        foreach (array_keys($sentences) as $sentence) {
+            if (
+                preg_match('/^an?\s+error\b/i', $sentence) ||
+                preg_match('/\breturns?\s+an?\s+error\b/i', $sentence)
+            ) {
+                continue;
+            }
+
+            // "Array of X" / "list of X"
+            if (preg_match('/(?:[Aa]rray|[Ll]ist) of\s+([A-Z]\w*)/', $sentence, $match)) {
+                $returns[] = 'Array<' . $match[1] . '>';
+                continue;
+            }
+
+            $found = false;
+
+            // "the new invite link as ChatInviteLink"
+            if (preg_match('/\bas\s+([A-Z]\w*)/', $sentence, $match)) {
+                $returns[] = $match[1];
+                $found = true;
+            }
+
+            // "a File object"
+            if (preg_match_all('/([A-Z]\w*)\s+objects?\b/', $sentence, $matches)) {
+                foreach ($matches[1] as $type) {
+                    $returns[] = $type;
+                    $found = true;
+                }
+            }
+
+            // "the Message is returned" / "otherwise True is returned"
+            if (preg_match_all('/([A-Z]\w*)\s+(?:is|are)\s+returned\b/', $sentence, $matches)) {
+                foreach ($matches[1] as $type) {
+                    $returns[] = $type;
+                    $found = true;
+                }
+            }
+
+            // "Returns True on success"
+            if (preg_match_all('/\b(True|False)\b/', $sentence, $matches)) {
+                foreach ($matches[1] as $type) {
+                    $returns[] = $type;
+                    $found = true;
+                }
+            }
+
+            if ($found) {
+                continue;
+            }
+
+            // "Returns BotName on success" / "Returns the MessageId ..."
+            if (preg_match('/\bReturns?\s+(?:(?:the|a|an)\s+)?([A-Z]\w*)\b/', $sentence, $match)) {
+                if (!in_array($match[1], ['Array', 'True', 'False', 'Telegram', 'Bot', 'API'], true)) {
+                    $returns[] = $match[1];
+                }
+            } elseif (preg_match('/\bReturns?\s+the\s+[a-z]+\s+([A-Z]\w*)\b/', $sentence, $match)) {
+                if (!in_array($match[1], ['Array', 'True', 'False', 'Telegram', 'Bot', 'API'], true)) {
+                    $returns[] = $match[1];
+                }
+            } elseif (preg_match('/\bOn success,\s*(?:(?:the|a|an)\s+)?([A-Z]\w*)\b/i', $sentence, $match)) {
+                if (!in_array($match[1], ['Array', 'True', 'False', 'Telegram', 'Bot', 'API'], true)) {
+                    $returns[] = $match[1];
+                }
+            }
+        }
+
+        if ($returns === []) {
+            return;
+        }
+
+        $items[$currentType][$currentName]['returns'] = array_values(array_unique($returns));
     }
 
     protected static function cleanType(string $type): array

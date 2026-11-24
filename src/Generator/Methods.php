@@ -56,6 +56,11 @@ class Methods implements GeneratorInterface
         'use Mk4U\TGram\Core\Entities\ChatInviteLink;',
         'use Mk4U\TGram\Core\Entities\ChatFullInfo;',
         'use Mk4U\TGram\Core\Entities\ChatMember;',
+        'use Mk4U\TGram\Core\Entities\ChatShareThemeBackdrops;',
+        'use Mk4U\TGram\Core\Entities\EphemeralMessageParameters;',
+        'use Mk4U\TGram\Core\Entities\Gifts;',
+        'use Mk4U\TGram\Core\Entities\OwnedGifts;',
+        'use Mk4U\TGram\Core\Entities\UniqueGift;',
         'use Mk4U\TGram\Core\Entities\ForumTopic;',
         'use Mk4U\TGram\Core\Entities\UserChatBoosts;',
         'use Mk4U\TGram\Core\Entities\BusinessConnection;',
@@ -80,17 +85,48 @@ class Methods implements GeneratorInterface
     {
         $outputDir = getcwd() . '/src/Core/';
         $file = $outputDir . 'Methods.php';
-        $content = '';
+        $body = '';
 
         // Crear directorio si no existe
         if (!file_exists($outputDir)) {
             mkdir($outputDir, 0777, true);
         }
 
-        $useClass = implode("\n", self::NAMESPACES);
+        // Procesar todos los tipos definidos
+        foreach ($methods as $name => $data) {
+            $parameters = $data['parameters'] ?? [];
+            $returns = $data['returns'] ?? ['mixed'];
+
+            $args = self::getProperties($parameters);
+            $docBlock = self::buildDocBlock(
+                $name,
+                $data['description'],
+                $parameters,
+                $returns
+            );
+            $return = TypeResolver::getReturnType($returns);
+
+            if ($name == 'getBusinessAccountStarBalance') {
+                $return = 'StarAmount';
+            }
+
+            $body .= <<<PHP
+
+                $docBlock
+                public function $name($args): $return
+                {
+                    \$args = get_defined_vars();
+                    unset(\$args['this']);
+                    return \$this->sender(__FUNCTION__, \$args);
+                }
+            
+            PHP;
+        }
+
+        $useClass = self::buildImports($body);
 
         // crea encabezado
-        $content .= <<<PHP
+        $content = <<<PHP
         <?php
 
         namespace Mk4U\\TGram\\Core;
@@ -107,41 +143,36 @@ class Methods implements GeneratorInterface
 
         PHP;
 
-        // Procesar todos los tipos definidos
-        foreach ($methods as $name => $data) {
-            $parameters = $data['parameters'] ?? [];
-            $returns = $data['returns'];
-
-            $args = self::getProperties($parameters);
-            $docBlock = self::buildDocBlock(
-                $name,
-                $data['description'],
-                $parameters,
-                $returns
-            );
-            $return = TypeResolver::getReturnType($returns);
-
-            if ($name == 'getBusinessAccountStarBalance') {
-                $return = 'StarAmount';
-            }
-
-            $content .= <<<PHP
-
-                $docBlock
-                public function $name($args): $return
-                {
-                    \$args = get_defined_vars();
-                    unset(\$args['this']);
-                    return \$this->sender(__FUNCTION__, \$args);
-                }
-            
-            PHP;
-        }
-
+        $content .= $body;
         $content .= <<<PHP
         }
         PHP;
         file_put_contents($file, $content);
+    }
+
+    /**
+     * Une los imports fijos con los tipos usados en las firmas generadas,
+     * para que un tipo nuevo de la API no requiera editar NAMESPACES.
+     */
+    private static function buildImports(string $body): string
+    {
+        $imports = self::NAMESPACES;
+
+        preg_match_all('/^\s*public function \w+\(.*\):\s*\S+/m', $body, $signatures);
+
+        foreach ($signatures[0] as $signature) {
+            preg_match_all('/(?<![\w\\\\$])([A-Z][A-Za-z0-9_]*)\b/', $signature, $matches);
+
+            foreach ($matches[1] as $class) {
+                $line = 'use Mk4U\\TGram\\Core\\Entities\\' . $class . ';';
+
+                if (!in_array($line, $imports, true)) {
+                    $imports[] = $line;
+                }
+            }
+        }
+
+        return implode("\n", $imports);
     }
 
     private static function getProperties(array $parameters): string
@@ -170,7 +201,7 @@ class Methods implements GeneratorInterface
     {
         $desc = implode("\n     * ", $description);
         $returnType = TypeResolver::getPhpType($returns);
-        $returnType = TypeResolver::formatPhpDocType($returnType);
+        $returnType = $returnType !== '' ? TypeResolver::formatPhpDocType($returnType) : 'mixed';
 
         $doc = "/**\n";
         $doc .= "     * $desc\n";

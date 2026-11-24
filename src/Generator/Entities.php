@@ -46,10 +46,15 @@ class Entities implements GeneratorInterface
 
             //Subentidades
             if (isset($typeData['subtypes'])) {
-                $subtypes = SubType::from($name);
-                $addMethod = $subtypes->resolveMethod();
-                $constants = $subtypes->constants();
-                $factory = $subtypes->factoryMethod();
+                $subtypes = SubType::tryFrom($name);
+
+                if ($subtypes !== null) {
+                    $addMethod = $subtypes->resolveMethod();
+                    $constants = $subtypes->constants();
+                    $factory = $subtypes->factoryMethod();
+                } else {
+                    fwrite(STDERR, "Warning: no SubType mapping found for {$name}; subtypes will be skipped.\n");
+                }
             }
 
             //Entidades con metodos custom
