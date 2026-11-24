@@ -2,7 +2,6 @@
 
 namespace Mk4U\TgApiKit\Generator;
 
-use Mk4U\TgApiKit\SubType;
 use Mk4U\TgApiKit\TypeResolver;
 
 /**
@@ -32,6 +31,14 @@ class Entities implements GeneratorInterface
             mkdir($outputDir, 0777, true);
         }
 
+        // Subtipos de cada entidad padre, derivados de la documentación
+        try {
+            $subtypes = SubTypes::map($types);
+        } catch (\Throwable $e) {
+            fwrite(STDERR, "Warning: could not generate the subtypes:: {$e->getMessage()}\n");
+            $subtypes = [];
+        }
+
         // Procesar todos los tipos definidos
         foreach ($types as $name => $typeData) {
 
@@ -46,14 +53,12 @@ class Entities implements GeneratorInterface
 
             //Subentidades
             if (isset($typeData['subtypes'])) {
-                $subtypes = SubType::tryFrom($name);
-
-                if ($subtypes !== null) {
-                    $addMethod = $subtypes->resolveMethod();
-                    $constants = $subtypes->constants();
-                    $factory = $subtypes->factoryMethod();
+                if (isset($subtypes[$name])) {
+                    $addMethod = $subtypes[$name]['resolve'];
+                    $constants = $subtypes[$name]['constants'];
+                    $factory = $subtypes[$name]['factory'];
                 } else {
-                    fwrite(STDERR, "Warning: no SubType mapping found for {$name}; subtypes will be skipped.\n");
+                    fwrite(STDERR, "Warning: could not generate subtypes of {$name}; omitted.\n");
                 }
             }
 

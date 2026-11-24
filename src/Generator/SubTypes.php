@@ -3,19 +3,18 @@
 namespace Mk4U\TgApiKit\Generator;
 
 /**
- * Genera automáticamente el enum SubType a partir de los metadatos de la API.
+ * Genera el código de resolución de subtipos para las entidades padre.
  *
- * La documentación de Telegram publica, para cada tipo padre, la lista de
- * subtipos y, en cada subtipo, el campo discriminador con su valor
- * ("always “data”" o "must be data"). Con esa información se generan:
+ * No escribe archivos ni mantiene un registro aparte: Entities::generate()
+ * le pasa los metadatos scrapeados y recibe, por cada padre, el código de
+ * resolve(), de create() y sus constantes.
  *
- *  - los case del enum
- *  - los match de resolveMethod(), factoryMethod() y constants()
- *  - los métodos resolveX(), factoryX() y constX()
+ * La documentación de Telegram publica, para cada padre, la lista de hijos
+ * y, en cada hijo, el campo discriminador con su valor ("always “data”" o
+ * "must be photo"). Con esa información se deduce el resto.
  *
- * Los pocos padres que no usan un discriminador simple (por ejemplo
- * InputMessageContent, que se detecta por campos presentes) se resuelven
- * con estrategias específicas declaradas en SPECIAL_STRATEGIES.
+ * Los pocos padres que no usan un discriminador simple se resuelven con
+ * estrategias específicas declaradas en SPECIAL_STRATEGIES.
  */
 class SubTypes
 {
@@ -35,7 +34,7 @@ class SubTypes
 
     /**
      * Nombres de constantes que ya formaban parte de la API pública y que no
-     * queremos romper al regenerar el enum.
+     * queremos romper al regenerar las entidades.
      */
     private const CONSTANT_ALIASES = [
         'date_time' => 'DATETIME',
@@ -45,15 +44,24 @@ class SubTypes
         'pre' => 'PREFORMATTED',
     ];
 
-    public static function generate(array $types, ?string $outputFile = null): void
+    /**
+     * Código de resolución por entidad padre.
+     *
+     * @return array<string, array{resolve: string, factory: string, constants: ?string}>
+     */
+    public static function map(array $types): array
     {
-        $outputFile ??= getcwd() . '/src/SubType.php';
+        $map = [];
 
-        if (!is_dir(dirname($outputFile))) {
-            mkdir(dirname($outputFile), 0777, true);
+        foreach (self::build($types) as $parent) {
+            $map[$parent['name']] = [
+                'resolve' => self::resolveBody($parent),
+                'factory' => self::factoryBody($parent),
+                'constants' => self::constantsBody($parent),
+            ];
         }
 
-        file_put_contents($outputFile, self::render(self::build($types)));
+        return $map;
     }
 
     /**
@@ -457,78 +465,39 @@ class SubTypes
         return ctype_digit($suffix[0]) ? '_' . $suffix : $suffix;
     }
 
-    private static function render(array $parents): string
+    private static function constantsBody(array $parent): ?string
     {
-        $output = "<?php\n\nnamespace Mk4U\\TgApiKit;\n\n";
-        $output .= "/**\n";
-        $output .= " * Registro de subtipos generado desde la documentación de Telegram.\n";
-        $output .= " *\n";
-        $output .= " * Este archivo es generado automáticamente por bin/update-api.\n";
-        $output .= " * No lo edites a mano: vuelve a ejecutar el generador.\n";
-        $output .= " */\n";
-        $output .= "enum SubType: string\n{\n";
-
-        foreach ($parents as $parent) {
-            $output .= "    case {$parent['name']} = '{$parent['name']}';\n";
+        if ($parent['constants'] === []) {
+            return null;
         }
 
-        $output .= "\n    public function resolveMethod(): string\n    {\n        return match (\$this) {\n";
-        foreach ($parents as $parent) {
-            $output .= "            self::{$parent['name']} => \$this->resolve{$parent['name']}(),\n";
-        }
-        $output .= "        };\n    }\n";
-
-        $output .= "\n    public function factoryMethod(): string\n    {\n        return match (\$this) {\n";
-        foreach ($parents as $parent) {
-            $output .= "            self::{$parent['name']} => \$this->factory{$parent['name']}(),\n";
-        }
-        $output .= "        };\n    }\n";
-
-        $output .= "\n    public function constants(): string\n    {\n        return match (\$this) {\n";
-        foreach ($parents as $parent) {
-            $output .= "            self::{$parent['name']} => \$this->const{$parent['name']}(),\n";
-        }
-        $output .= "        };\n    }\n";
-
-        foreach ($parents as $parent) {
-            $output .= self::renderConstantsMethod($parent);
-            $output .= self::renderFactoryMethod($parent);
-            $output .= self::renderResolveMethod($parent);
-        }
-
-        $output .= "}\n";
-
-        return $output;
-    }
-
-    private static function renderConstantsMethod(array $parent): string
-    {
-        $name = $parent['name'];
         $lines = [];
 
         foreach ($parent['constants'] as $constant) {
-            $lines[] = '    public const ' . $constant['name'] . ' = ' . var_export($constant['value'], true) . ';';
+            $lines[] = 'public const ' . $constant['name'] . ' = ' . var_export($constant['value'], true) . ';';
         }
 
-        $return = $lines === []
-            ? '""'
-            : "\"\n" . implode("\n", $lines) . '"';
-
-        return "\n    private function const{$name}(): string\n    {\n        return {$return};\n    }\n";
+        return implode("\n    ", $lines);
     }
 
-    private static function renderFactoryMethod(array $parent): string
+    private static function factoryBody(array $parent): string
     {
-        $name = $parent['name'];
-
-        $body = match ($parent['strategy']) {
+        return match ($parent['strategy']) {
             'presence' => self::factoryPresenceBody($parent),
             'inline' => self::factoryInlineBody($parent),
             'fields' => self::factoryFieldsBody($parent),
             default => self::factoryMatchBody($parent),
         };
+    }
 
-        return "\n    private function factory{$name}(): string\n    {\n        return <<<'PHP'\n{$body}\nPHP;\n    }\n";
+    private static function resolveBody(array $parent): string
+    {
+        return match ($parent['strategy']) {
+            'presence' => self::resolvePresenceBody($parent),
+            'inline' => self::resolveInlineBody($parent),
+            'fields' => self::resolveFieldsBody($parent),
+            default => self::resolveMatchBody($parent),
+        };
     }
 
     private static function factoryMatchBody(array $parent): string
@@ -645,20 +614,6 @@ class SubTypes
         $body .= "    }";
 
         return $body;
-    }
-
-    private static function renderResolveMethod(array $parent): string
-    {
-        $name = $parent['name'];
-
-        $body = match ($parent['strategy']) {
-            'presence' => self::resolvePresenceBody($parent),
-            'inline' => self::resolveInlineBody($parent),
-            'fields' => self::resolveFieldsBody($parent),
-            default => self::resolveMatchBody($parent),
-        };
-
-        return "\n    private function resolve{$name}(): string\n    {\n        return <<<'PHP'\n{$body}\nPHP;\n    }\n";
     }
 
     private static function resolveMatchBody(array $parent): string
